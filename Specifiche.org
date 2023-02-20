@@ -1,0 +1,481 @@
+#+title: Specifiche SC
+#+author: Servizi Informatici CNGEI
+#+LANGUAGE: it
+#+LATEX_HEADER: \usepackage[margin=0.5in]{geometry}
+
+* Domini
+** Anagrafica
+Gestione dei dati delle persone coinvolte nelle attivita' del CNGEI: tesserati e non (e.g. sostenitori, ragazzi in prova, soggetti con assicurazione temporanea, genitori?, segreteria...)
+- CRUD[fn:: Create, read, update, delete]
+- Auditing di chi accede a quali dati (e.g. dati sensibili ai fini GDPR)
+** Tesseramenti
+Iscrizioni di soci (adulti), iscritti (giovani) e sostenitori
+- Inserimento (massivo) dei tesseramenti
+- Elenco tesserati visibili in base ad ACL[fn:: Access control list, aka permessi] (e.g. SiS \to read-only unita', CU \to r/w unita', CG \to r/w gruppo...)
+- Statistiche su perdite/nuovi ingressi/trend
+** Eventi
+Gestione degli eventi a livello locale/nazionale (inizialmente, solo nazionale)
+- CRUD di eventi con form dinamici, possibilita' di caricare allegati (bonifici, per ora), limitati in base a incarichi o tipologia di tesseramento (soci/iscritti)
+- Inserimento (massivo) di iscrizioni a eventi, caricamento bonifici con quote calcolate in base ad opzioni nel form
+** Formazione
+TODO: da verificare con CoCon RA (prima devono capirsi da soli)
+
+Indicativamente dovrebbe funzionare come gli eventi, con alcune funzionalita' costruite "sopra" agli eventi: divisione in moduli, gestione degli staff di corso (con rispettive ACL per i formatori), gestione delle propedeuticita', degli esiti e dei brevetti conseguiti
+
+* Gestione dei permessi
+** Autenticazione
+Usiamo Keycloak per gestire le utenze e le rispettive credenziali, anche in modo da fornire l'autenticazione ad altri applicativi (e.g. ~assemblee.cngei.it~, ~cngei-ra.it~, ...). In Keycloak oltre alle utenze sono salvati anche gli incarichi e i gruppi dei tesserati, e' una duplicazione ma e' comodo per evitare di dare a ogni client esterno accesso alle API di SC.
+** Permessi
+A seconda degli incarichi, possiamo assegnare delle ACL ai singoli utenti. Questo implica che chi non ha incarichi (ex soci, sostenitori, genitori) non ha permessi se non quelli minimi di default.
+*** Anagrafica (e tesseramenti)
+- ~WRITE_SELF~: lettura/scrittura dell'entita' persona relativa a se stessi \to default per tutti gli utenti
+- ~READ_UNITA~: lettura di tutte le persone nella propria unita' \to senior in servizio
+- ~WRITE_UNITA~: lettura/scrittura di tutte le persone nella propria unita' \to VCU/CU
+- ~READ_GRUPPO~: lettura di tutte le persone nel proprio gruppo \to Senior non in unita'[fn:: Il gruppo 0 indica il Clan]
+- ~WRITE_GRUPPO~: lettura/scrittura di tutte le persone nel proprio gruppo \to CG
+- ~READ_SEZIONE~: lettura di tutte le persone nella propria sezione \to COS
+- ~WRITE_SEZIONE~: lettura/scrittura di tutte le persone nella propria sezione \to CdS, PSez, CENS
+- ~READ_REGIONE~: lettura di tutte le persone nella propria regione \to CREG
+- ~READ_NAZIONALE~: lettura di tutte le persone in anagrafica \to RNC[fn:: Responsabile Nazionale Censimenti], SMM[fn:: Social media manager], RNStampa...
+**** Tesseramenti
+- ~WRITE_UNITA~: puo' tesserare persone nella propria unita' (rinnovi/nuovi tesseramenti)
+- ~WRITE_GRUPPO~: puo' tesserare persone nel proprio gruppo (rinnovi/nuovi tesseramenti)
+- ~WRITE_SEZIONE~: puo' tesserare persone nei gruppi della propria sezione (rinnovi/nuovi tesseramenti)
+*** Eventi
+- Ogni utente puo' iscrivere se stesso agli eventi
+- ~WRITE_UNITA~: puo' iscrivere tutti i membri della propria unita'
+- ~WRITE_GRUPPO~: puo' iscrivere tutti i membri del proprio gruppo
+- ~WRITE_SEZIONE~: puo' iscrivere tutti i membri della propria sezione
+- ~ADMIN_EVENTI~: puo' creare nuovi eventi, vedere tutte le iscrizioni
+
+* API
+** Persone
+#+begin_src plantuml :file persone.png
+left to right direction
+class PersonaEditModel {
+    int tessera
+    ,*String nome
+    ,*String cognome
+    ,*String codiceFiscale
+
+    ,*String indirizzo
+    ,*String comune
+    ,*String provincia
+    ,*String cap
+
+    ,*Date dataNascita
+    ,*String comuneNascita
+    ,*String provinciaNascita
+
+    ,*String email
+    String emailSecondaria
+
+    ,*String telefono
+    String telefonoSecondario
+}
+
+class PersonaViewModel {
+    ,*UUID id
+    int tessera
+    ,*String nome
+    ,*String cognome
+    bool adulto
+    ,*String[] incarichi
+}
+
+class PersonaDetailViewModel {
+    ,*TesseramentoDetailViewModel[] tesseramenti
+}
+
+class IncaricoCreateModel {
+    ,*String idTipoIncarico
+}
+
+class IncaricoEditModel {
+    ,*Date inizio
+    Date fine
+}
+
+PersonaDetailViewModel --|> PersonaViewModel
+PersonaViewModel --|> PersonaEditModel
+IncaricoEditModel <|-- IncaricoCreateModel
+#+end_src
+#+ATTR_LATEX: :width 5cm
+#+RESULTS:
+[[file:persone.png]]
+
+- ~POST /persone~: crea una nuova persona\\
+  Request body: ~PersonaEditModel~\\
+  Response body: ~PersonaDetailViewModel~\\
+  Permessi richiesti: ~WRITE_UNITA~ / ~WRITE_GRUPPO~ / ~WRITE_SEZIONE~ a seconda della persona\\
+#+BEGIN_SRC
+Decidere come associare a un gruppo se non posso creare subito un tesseramento,
+altrimenti l'entita' viene persa e nessuno la puo' recuperare.
+#+END_SRC
+
+- ~PUT /persone/:id~: modifica una persona esistente\\
+  Request body: ~PersonaEditModel~\\
+  Response body: ~PersonaDetailViewModel~\\
+  Permessi richiesti: ~WRITE_SELF~ / ~WRITE_UNITA~ / ~WRITE_GRUPPO~ / ~WRITE_SEZIONE~\\
+#+BEGIN_SRC
+Decidere se PATCH o PUT
+#+END_SRC
+
+- ~GET /persone/:id~: restituisce la persona con l'id indicato\\
+  Response body: ~PersonaDetailViewModel~\\
+  Permessi richiesti: ~READ_UNITA~ / ~READ_GRUPPO~ / ~READ_SEZIONE~ / ~READ_REGIONE~ / ~READ_NAZIONALE~ a seconda della persona e di chi effettua la chiamata\\
+#+BEGIN_SRC
+Se possiamo tenere salvati nel database dati sensibili secondo il GDPR, dovrebbero far parte
+solo del DetailViewModel, in questo modo possiamo inserire un audit log ogni volta che viene
+invocato queso metodo per tenere traccia di chi vi accede
+#+END_SRC
+
+- ~GET /persone/me~: restituisce la persona corrispondente all'utente collegato\\
+  Response body: ~PersonaDetailViewModel~\\
+  Permessi richiesti: ~READ_SELF~
+
+- ~GET /persone~: restituisce le persone corrispondenti ai filtri indicati\\
+  Query parameters: ~sezione?: UUID, gruppo?: number, tessera?: number, incaricoIn: String[], isTesserato?: bool, regione?: string, adulto?: bool~\\
+  Response body: ~PersonaViewModel[]~\\
+  Permessi richiesti: ~READ_UNITA~ / ~READ_GRUPPO~ / ~READ_SEZIONE~ / ~READ_REGIONE~ / ~READ_NAZIONALE~ a seconda dei filtri\\
+
+*** Incarichi
+- CRUD per tipologie di incarichi - solo per amministratori
+- ~POST~ / ~PATCH~ / ~DELETE~ per incarichi ~/persona/:idPersona/incarichi~
+  Permessi richiesti: ~WRITE_SEZIONE~\\
+
+
+
+** Tesseramenti
+#+begin_src plantuml :file tesseramenti.png
+interface IscrizioneEditModel {
+    ,*UUID idPersona
+    UUID idPagamento
+    ,*bool confermato
+}
+
+interface IscrizioneViewModel {
+    ,*UUID id
+    ,*bool confermato
+    ,*DateTime dataCreazione
+    ,*UUID idCreatore
+
+}
+
+interface IscrizioneDetailViewModel {
+    ,*PersonaViewModel persona
+    Pagamento pagamento
+}
+
+class TesseramentoEditModel {
+    ,*UUID idGruppo
+    ,*bool temporaneo
+    ,*bool sostenitore
+}
+
+class TesseramentoViewModel {
+    ,*String annoScout
+    ,*bool nuovo
+    ,*bool rientro
+}
+
+class TesseramentoDetailViewModel {
+    ,*Gruppo gruppo
+}
+
+IscrizioneViewModel --|> IscrizioneEditModel
+IscrizioneDetailViewModel --|> IscrizioneViewModel
+TesseramentoEditModel --|> IscrizioneEditModel
+TesseramentoViewModel --|> IscrizioneViewModel
+TesseramentoViewModel --|> TesseramentoEditModel
+TesseramentoDetailViewModel --|> IscrizioneDetailViewModel
+TesseramentoDetailViewModel --|> TesseramentoViewModel
+#+end_src
+#+ATTR_LATEX: :height 8cm
+#+RESULTS:
+[[file:tesseramenti.png]]
+
+- ~POST /iscrizioni/eventi/~: crea una nuova iscrizione per un evento\\
+  Request body: ~IscrizioneEventoEditModel~\\
+  Response body: ~IscrizioneEventoDetailViewModel~\\
+  Permessi richiesti: (~WRITE_UNITA~ forse?) / ~WRITE_GRUPPO~ / ~WRITE_SEZIONE~ a seconda della persona da iscrivere\\
+
+- ~PUT /iscrizioni/evento/:id~: modifica un'iscrizione esistente (e.g. nuovo bonifico, risposte a form...)\\
+  Request body: ~IscrizioneEventoEditModel~\\
+  Response body: ~IscrizioneEventoEditModel~\\
+  Permessi richiesti: (~WRITE_UNITA~ forse?) / ~WRITE_GRUPPO~ / ~WRITE_SEZIONE~\\
+#+BEGIN_SRC
+  Ci sono campi che non ha senso modificare, ad esempio l'id della persona o l'anno scout,
+  forse vale la pena di avere un IscrizioneCreateModel (e TesseramentoCreateModel)
+#+END_SRC
+
+- ~DELETE /iscrizioni/evento/:id~: elimina un'iscrizione (se e solo se non confermata)\\
+  Response body: -\\
+  Permessi richiesti: (~WRITE_UNITA~ forse?) / ~WRITE_GRUPPO~ / ~WRITE_SEZIONE~\\
+
+** Iscrizioni a eventi
+#+begin_src plantuml :file eventi.png
+interface IscrizioneEditModel {
+    ,*UUID idPersona
+    UUID idPagamento
+    ,*bool confermato
+}
+
+interface IscrizioneViewModel {
+    ,*UUID id
+    ,*bool confermato
+    ,*DateTime dataCreazione
+    ,*UUID idCreatore
+}
+
+interface IscrizioneDetailViewModel {
+    ,*PersonaViewModel persona
+    Pagamento pagamento
+}
+
+class IscrizioneEventoEditModel {
+    ,*UUID idEvento
+    ,*Map<DomandaForm, String> risposte
+    ,*TipoAlloggio tipoAlloggio
+    UUID idPagamento
+}
+
+class IscrizioneEventoViewModel {
+    ,*PersonaViewModel persona
+    ,*int costoTotale
+    Pagamento pagamento
+}
+
+IscrizioneViewModel --|> IscrizioneEditModel
+IscrizioneDetailViewModel --|> IscrizioneViewModel
+IscrizioneEventoEditModel --|> IscrizioneEditModel
+IscrizioneEventoViewModel --|> IscrizioneDetailViewModel
+IscrizioneEventoViewModel --|> IscrizioneEventoEditModel
+#+end_src
+#+ATTR_LATEX: :height 8cm
+#+RESULTS:
+[[file:eventi.png]]
+
+- ~POST /iscrizioni/eventi~: crea una nuova iscrizione ad un evento\\
+  Request body: ~IscrizioneEventoEditModel~\\
+  Response body: ~IscrizioneEventoViewModel~\\
+  Permessi richiesti: ~WRITE_SELF~ / ~WRITE_UNITA~ / ~WRITE_GRUPPO~ / ~WRITE_SEZIONE~ a seconda della persona da iscrivere\\
+
+- ~PUT /iscrizioni/eventi/:id~: modifica un'iscrizione esistente (e.g. nuovo bonifico, risposte a form...)\\
+  Request body: ~IscrizioneEventoEditModel~\\
+  Response body: ~IscrizioneEventoViewModel~\\
+  Permessi richiesti: ~WRITE_SELF~ / ~WRITE_UNITA~ / ~WRITE_GRUPPO~ / ~WRITE_SEZIONE~\\
+
+- ~DELETE /iscrizioni/eventi/:id~: elimina un'iscrizione (se e solo se non confermata)
+  Response body: -\\
+  Permessi richiesti: ~WRITE_SELF~ / ~WRITE_UNITA~ / ~WRITE_GRUPPO~ / ~WRITE_SEZIONE~\\
+
+- ~GET /iscrizioni/eventi/:idEvento~: restituisce le iscrizioni visibili all'utente per l'evento dato\\
+  Response body: ~IscrizioneEventoViewModel[]~\\
+  Permessi richiesti: ~WRITE_SELF~ (minimo)\\
+* Schema ER
+#+begin_src plantuml :file schema.png
+entity Persona #cyan {
+    ,*UUID id
+    int tessera
+    ,*String nome
+    ,*String cognome
+    ,*String codiceFiscale
+
+    ,*String indirizzo
+    ,*String comune
+    ,*String provincia
+    ,*String cap
+
+    ,*Date dataNascita
+    ,*String comuneNascita
+    ,*String provinciaNascita
+
+    ,*String email
+    String emailSecondaria
+
+    ,*String telefono
+    String telefonoSecondario
+
+    bool adulto
+    --
+    ,*Tesseramento[] tesseramenti
+    ,*Incarico[] incarichi
+}
+note right of Persona::id
+  Usiamo un id invece della tessera nel caso serva anonimizzare i dati per GDPR
+end note
+note right of Persona::adulto
+  Calcolato in base alla data di nascita
+end note
+
+entity Tesseramento #palegreen {
+    ,*UUID idGruppo
+    ,*String annoScout
+    ,*bool temporaneo
+    ,*bool nuovo
+    ,*bool rientro
+    ,*bool sostenitore
+    --
+    ,*Persona persona
+    ,*Gruppo gruppo
+    Pagamento pagamento
+}
+note right of Tesseramento::rientro
+  Tesserato in precedenza, era uscito dall'associazione
+end note
+
+entity Gruppo #palegreen {
+    ,*UUID id,
+    ,*UUID idSezione
+    ,*int numero
+    --
+    ,*Tesseramento[] tesseramenti
+}
+
+entity Sezione #palegreen {
+    ,*UUID id,
+    ,*String nome
+    ,*String regione
+    ,*bool chiusa
+    --
+    ,*Gruppo[] gruppi
+}
+note right of Sezione::regione
+A essere pignoli, sarebbe una enum
+end note
+
+entity TipoIncarico #cyan {
+    ,*String sigla
+    ,*String nome
+    ,*bool nazionale
+    ,*bool adulti
+    ,*String[] nominabileDa
+    ,*bool attivo
+}
+
+entity Incarico #cyan {
+    ,*UUID id
+    ,*UUID idPersona
+    ,*String idTipoIncarico
+    ,*LocalDate inizio
+    LocalDate fine
+    ,*bool terminato
+    --
+    ,*TipoIncarico tipoIncarico
+}
+
+entity Evento #pink {
+    ,*UUID id
+    ,*String nome
+    String descrizione
+    ,*LocalDate inizioEvento
+    ,*LocalDate fineEvento
+    ,*LocalDate inizioIscrizioni
+    ,*LocalDate fineIscrizioni
+    ,*int maxPartecipanti
+    ,*bool eventoAdulti
+    ,*int costoBase
+    ,*UUID[] idAllegato
+    --
+    ,*IscrizioneEvento[] iscrizioni
+    ,*TipoAlloggio[] alloggi
+    ,*DomandaForm[] form
+    ,*File[] allegati
+}
+
+class DomandaForm #pink {
+    ,*String titolo
+    String descrizione
+    ,*bool opzionale
+    ,*TipoDomanda tipo
+    String[] opzioni
+}
+
+class TipoAlloggio #pink {
+    ,*String nome
+    ,*int postiPerUnita
+    ,*int postiTotali
+    ,*int postiDisponibili
+    ,*int costo
+}
+note right of TipoAlloggio::postiPerUnita {
+   e.g.: 2 per doppia, 3 tripla...
+}
+
+enum TipoDomanda #pink {
+    testoBreve
+    testo
+    checkbox
+    numero
+    select
+}
+
+entity IscrizioneEvento #pink {
+    ,*UUID idEvento
+    Map<DomandaForm, String> risposte
+    --
+    ,*Persona persona
+    ,*Evento evento
+    Pagamento pagamento
+}
+
+interface Pagamento {
+    ,*UUID id
+    ,*DateTime dataCreazione
+    ,*bool confermato
+}
+
+class Bonifico {
+    ,*UUID idFile
+    --
+    File file
+}
+
+class PagamentoPaypal {
+   ,*String idPaypal
+   ,*int importo
+}
+
+interface Iscrizione {
+    ,*UUID id
+    ,*UUID idPersona
+    UUID idPagamento
+    ,*bool confermato
+    ,*DateTime dataCreazione
+    ,*UUID idCreatore
+}
+
+file File [
+    ,*UUID id
+    ,*String nome
+]
+
+note right of Bonifico::idFile
+  ID del file sul blob storage, puo' essere relativo a piu' di un pagamento
+end note
+
+Persona }o--|| Tesseramento
+Gruppo }o--|| Tesseramento
+Sezione }o--|| Gruppo
+Incarico ||-- TipoIncarico
+Persona }o-- Incarico
+Evento }o-- TipoIncarico
+Evento }o-- File
+Evento }o--|| DomandaForm
+DomandaForm ||-- TipoDomanda
+Evento }|--|| TipoAlloggio
+Evento }o--|| IscrizioneEvento
+IscrizioneEvento ||-- TipoAlloggio
+Persona }o--|| IscrizioneEvento
+Bonifico }|-- File
+Bonifico --|> Pagamento
+PagamentoPaypal --|> Pagamento
+IscrizioneEvento --|> Iscrizione
+Tesseramento --|> Iscrizione
+Iscrizione |o-- Pagamento
+#+end_src
+
+#+ATTR_LATEX: :height 24cm :options angle=90
+#+RESULTS:
+[[file:schema.png]]
